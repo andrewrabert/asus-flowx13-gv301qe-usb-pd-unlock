@@ -1,0 +1,3 @@
+EC indirect backup v1
+result=0 completed_passes=2 window=196608 pass=2 offset=030000 chip=51,25,02,00,00,00 elapsed_us=379660005
+last_result=0 incomplete=0 dirty=0 restored=1 samples=256 failed_phase=0 failed_address=0000 status=00

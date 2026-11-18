@@ -1,0 +1,41 @@
+# Keep the BIOS comparison corpus in /bios/ and the official 415 updater.
+# These are inputs to the investigation, not generated build products.
+
+# Extracted EC images/disassembly, generated analysis, hardware backups,
+# diagnostic builds, captures, and machine-specific logs.
+/ec/
+/out/
+
+# Keep the reviewed sector payload and SFDP headers used by the source/tests.
+# Full machine-specific flash backups remain excluded under /out/.
+
+# Python caches and local environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Native and UEFI build products.
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.efi
+*.elf
+*.gcda
+*.gcno
+*.profraw
+
+# Official vendor input, despite its executable extension.
+!/bios_update_windows_v415/ASUS_GV301QE_415_BIOS_Update_3.exe
+
+# Local editor and operating-system files.
+*.swp
+*.swo
+*~
+.DS_Store

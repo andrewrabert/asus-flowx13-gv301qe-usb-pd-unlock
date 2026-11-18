@@ -1,0 +1,158 @@
+/* Experimental GV301QE.415 indirect flash backup EC probe. Not a firmware programmer.
+ * Hardware use requires separately placing the exact arm token on the ESP.
+ * TPL excludes UEFI callbacks, NOT SMM or other bus masters.
+ */
+#include <efi.h>
+#include <efilib.h>
+#include "ec_indirect_probe.h"
+static uint64_t ticks_per_us;
+static uint64_t ticks(void) {
+    uint32_t lo,hi;
+    __asm__ volatile("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi<<32)|lo;
+}
+static uint64_t now_us(void *ctx) { (void)ctx; return ticks()/ticks_per_us; }
+static uint8_t port_status(void *ctx) {
+    uint8_t v; (void)ctx; __asm__ volatile("inb $0x66,%0":"=a"(v)); return v;
+}
+static uint8_t port_data(void *ctx) {
+    uint8_t v; (void)ctx; __asm__ volatile("inb $0x62,%0":"=a"(v)); return v;
+}
+static void port_command(void *ctx,uint8_t v) {
+    (void)ctx; __asm__ volatile("outb %0,$0x66"::"a"(v));
+}
+static void port_write_data(void *ctx,uint8_t v) {
+    (void)ctx; __asm__ volatile("outb %0,$0x62"::"a"(v));
+}
+static int str_equal(const UINT8 *s, const UINT8 *end, const char *expected) {
+    while (s<end && *expected && *s==(UINT8)*expected) { ++s; ++expected; }
+    return s<end && !*s && !*expected;
+}
+static int smbios_string(const UINT8 *start,const UINT8 *end,unsigned index,const char *expected) {
+    if (!index) return 0;
+    while (--index) { while(start<end && *start) ++start; if(start>=end) return 0; ++start; }
+    return str_equal(start,end,expected);
+}
+static int target_matches(void) {
+    SMBIOS_TABLE_3_0_ENTRY_POINT *e3=NULL; SMBIOS_TABLE_ENTRY_POINT *e2=NULL;
+    UINT8 *table=NULL; UINTN size=0;
+    if (!EFI_ERROR(LibGetSystemConfigurationTable(&SMBIOS3TableGuid,(VOID **)&e3))) {
+        table=(UINT8 *)(UINTN)e3->TableAddress; size=e3->TableMaximumSize;
+    } else if (!EFI_ERROR(LibGetSystemConfigurationTable(&SMBIOSTableGuid,(VOID **)&e2))) {
+        table=(UINT8 *)(UINTN)e2->TableAddress; size=e2->TableLength;
+    }
+    if (!table || size<4 || size>1024*1024) return 0;
+    UINTN offset=0; int bios=0,model=0;
+    while (offset+4<=size) {
+        UINT8 *p=table+offset; UINTN length=p[1], end=offset+length;
+        if (length<4 || end>=size) return 0;
+        while(end+1<size && (table[end] || table[end+1])) ++end;
+        if(end+1>=size) return 0;
+        if(p[0]==0 && length>5) bios=smbios_string(p+length,table+end+1,p[5],"GV301QE.415");
+        if(p[0]==1 && length>5) model=smbios_string(p+length,table+end+1,p[5],"ROG Flow X13 GV301QE");
+        if(p[0]==127) break;
+        offset=end+2;
+    }
+    return bios && model;
+}
+static EFI_STATUS write_log(EFI_FILE_HANDLE f,CHAR8 *text,UINTN size) {
+    EFI_STATUS s=uefi_call_wrapper(f->SetPosition,2,f,0);
+    if(EFI_ERROR(s)) return s;
+    UINTN written=size;
+    s=uefi_call_wrapper(f->Write,3,f,&written,text);
+    if(EFI_ERROR(s) || written!=size) return EFI_DEVICE_ERROR;
+    return uefi_call_wrapper(f->Flush,1,f);
+}
+EFI_STATUS efi_main(EFI_HANDLE image,EFI_SYSTEM_TABLE *system) {
+    InitializeLib(image,system);
+    EFI_LOADED_IMAGE *loaded=NULL; EFI_FILE_HANDLE root=NULL,arm=NULL,log=NULL;
+    EFI_HANDLE next=NULL; EFI_DEVICE_PATH *path=NULL;
+    EFI_STATUS result=uefi_call_wrapper(BS->HandleProtocol,3,image,&LoadedImageProtocol,(VOID **)&loaded);
+    if(EFI_ERROR(result)) return result;
+    root=LibOpenRoot(loaded->DeviceHandle);
+    if(!root) return EFI_NOT_FOUND;
+    if(!target_matches()) { Print(L"EC probe: model/BIOS guard refused. No port access.\r\n"); goto boot; }
+    result=uefi_call_wrapper(root->Open,5,root,&arm,L"\\EFI\\FlowEcAudit\\arm-backup-probe.txt",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
+    if(EFI_ERROR(result)) { Print(L"EC probe: not armed. No port access.\r\n"); goto boot; }
+    CHAR8 token[64]={0}; UINTN token_size=sizeof(token);
+    result=uefi_call_wrapper(arm->Read,3,arm,&token_size,token);
+    static const CHAR8 expected[]="GV301QE.415 INDIRECT BACKUP EC PROBE\n";
+    int armed=!EFI_ERROR(result) && token_size==sizeof(expected)-1 && CompareMem(token,(VOID *)expected,token_size)==0;
+    /* Consume the one-shot token BEFORE issuing any EC transaction. */
+    if(armed) result=uefi_call_wrapper(arm->Delete,1,arm);
+    else uefi_call_wrapper(arm->Close,1,arm);
+    if(!armed || result!=EFI_SUCCESS) { Print(L"EC probe: arm token invalid or not consumed.\r\n"); goto boot; }
+    result=uefi_call_wrapper(root->Open,5,root,&log,L"\\EFI\\FlowEcAudit\\backup-probe.txt",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    if(EFI_ERROR(result)) goto boot;
+    /* Fixed-size log avoids stale bytes from a previous longer report. */
+    CHAR8 text[8192]; SetMem(text,sizeof(text),' ');
+    static CHAR8 pending[]="EC indirect backup started; completion not yet recorded.\r\n";
+    CopyMem(text,pending,sizeof(pending)-1);
+    if(EFI_ERROR(write_log(log,text,sizeof(text)))) goto close_log;
+    uint64_t begin=ticks(); uefi_call_wrapper(BS->Stall,1,50000);
+    ticks_per_us=(ticks()-begin)/50000;
+    if(!ticks_per_us) goto close_log;
+    struct indirect_report report={0};
+    const struct mapping_io io={NULL,port_status,port_data,port_command,port_write_data,now_us};
+    UINT8 *buffer=AllocatePool(EC_BACKUP_WINDOW*2);
+    EFI_FILE_HANDLE files[2]={NULL,NULL};
+    CHAR16 *names[2]={L"\\EFI\\FlowEcAudit\\ec-backup-pass0.bin",L"\\EFI\\FlowEcAudit\\ec-backup-pass1.bin"};
+    unsigned outcome=0, completed=0, pass=0, offset=0;
+    uint8_t chip[6]={0};
+    uint64_t backup_start=now_us(NULL);
+    if(!buffer) {outcome=10;goto backup_finish;}
+    for(unsigned i=0;i<2;++i) {
+        EFI_FILE_HANDLE existing=NULL;
+        EFI_STATUS e=uefi_call_wrapper(root->Open,5,root,&existing,names[i],EFI_FILE_MODE_READ,0);
+        if(!EFI_ERROR(e)) {uefi_call_wrapper(existing->Close,1,existing);outcome=10;goto backup_finish;}
+        if(e!=EFI_NOT_FOUND) {outcome=10;goto backup_finish;}
+        e=uefi_call_wrapper(root->Open,5,root,&files[i],names[i],EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+        if(EFI_ERROR(e)) {outcome=10;goto backup_finish;}
+    }
+    EFI_TPL previous=uefi_call_wrapper(BS->RaiseTPL,1,TPL_HIGH_LEVEL);
+    ec_chip_info(&io,chip,&report);
+    uefi_call_wrapper(BS->RestoreTPL,1,previous);
+    if(report.result) {outcome=report.result;goto backup_finish;}
+    for(pass=0;pass<2;++pass) {
+        for(offset=0;offset<EC_BACKUP_WINDOW;offset+=256) {
+            previous=uefi_call_wrapper(BS->RaiseTPL,1,TPL_HIGH_LEVEL);
+            ec_indirect_page(&io,offset,buffer+pass*EC_BACKUP_WINDOW+offset,&report);
+            uefi_call_wrapper(BS->RestoreTPL,1,previous);
+            if(report.result || !report.restored || report.samples!=256) {outcome=report.result?report.result:11;goto backup_finish;}
+            if(!(offset&0xfff)) {
+                SetMem(text,sizeof(text),' ');
+                AsciiSPrint(text,sizeof(text),(const CHAR8 *)"EC backup IN PROGRESS pass=%d offset=%06x chip=%02x,%02x,%02x,%02x,%02x,%02x elapsed_us=%ld\r\n",
+                    pass,offset,chip[0],chip[1],chip[2],chip[3],chip[4],chip[5],now_us(NULL)-backup_start);
+                if(EFI_ERROR(write_log(log,text,sizeof(text)))) {outcome=10;goto backup_finish;}
+            }
+            if(!(offset&0x3fff)) Print(L"EC backup pass %d/2: %d/%d KiB\r\n",pass+1,offset/1024,EC_BACKUP_WINDOW/1024);
+        }
+        if(EFI_ERROR(write_log(files[pass],(CHAR8 *)(buffer+pass*EC_BACKUP_WINDOW),EC_BACKUP_WINDOW))) {outcome=10;goto backup_finish;}
+        ++completed;
+    }
+    if(CompareMem(buffer,buffer+EC_BACKUP_WINDOW,EC_BACKUP_WINDOW)!=0) outcome=4;
+backup_finish:
+    SetMem(text,sizeof(text),' ');
+    AsciiSPrint(text,sizeof(text),(const CHAR8 *)"EC indirect backup v1\r\nresult=%d completed_passes=%d window=%d pass=%d offset=%06x chip=%02x,%02x,%02x,%02x,%02x,%02x elapsed_us=%ld\r\nlast_result=%d incomplete=%d dirty=%d restored=%d samples=%d failed_phase=%d failed_address=%04x status=%02x\r\n",
+        outcome,completed,EC_BACKUP_WINDOW,pass,offset,chip[0],chip[1],chip[2],chip[3],chip[4],chip[5],now_us(NULL)-backup_start,
+        report.result,report.incomplete,report.dirty,report.restored,report.samples,report.failed_phase,report.failed_address,report.status);
+    write_log(log,text,sizeof(text));
+    for(unsigned i=0;i<2;++i) if(files[i]) uefi_call_wrapper(files[i]->Close,1,files[i]);
+    if(buffer) FreePool(buffer);
+    uefi_call_wrapper(log->Close,1,log);log=NULL;
+    if(report.incomplete || report.dirty) {
+        Print(L"EC BACKUP TRANSACTION UNCONFIRMED. CPU halted; physical recovery required.\r\n");
+        __asm__ volatile("cli");for(;;)__asm__ volatile("hlt");
+    }
+    Print(L"EC backup result %d, completed passes %d. No flash programming.\r\n",outcome,completed);
+close_log:
+    if(log) uefi_call_wrapper(log->Close,1,log);
+boot:
+    uefi_call_wrapper(root->Close,1,root);
+    path=FileDevicePath(loaded->DeviceHandle,L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi");
+    if(!path) return EFI_OUT_OF_RESOURCES;
+    result=uefi_call_wrapper(BS->LoadImage,6,FALSE,image,path,NULL,0,&next);
+    FreePool(path); if(EFI_ERROR(result)) return result;
+    result=uefi_call_wrapper(BS->StartImage,3,next,NULL,NULL);
+    uefi_call_wrapper(BS->UnloadImage,1,next); return result;
+}

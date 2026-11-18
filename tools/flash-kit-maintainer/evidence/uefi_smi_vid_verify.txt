@@ -1,0 +1,32 @@
+Read-only VID patch persistence verification v1
+pass=0 pci=00:14.3 offset=00 value=790E1022 status=0
+pass=0 pci=00:14.3 offset=08 value=06010051 status=0
+pass=0 pci=00:14.3 offset=40 value=0000000C status=0
+pass=0 pci=00:14.3 offset=44 value=FF03FFD5 status=0
+pass=0 pci=00:14.3 offset=48 value=03A0FF07 status=0
+pass=0 pci=00:14.3 offset=50 value=00000000 status=0
+pass=0 pci=00:14.3 offset=54 value=00000000 status=0
+pass=0 pci=00:14.3 offset=58 value=00000000 status=0
+pass=0 pci=00:14.3 offset=5C value=00000000 status=0
+pass=0 pci=00:14.3 offset=A0 value=FEC10002 status=0
+pass=0 pci=00:14.3 offset=B8 value=33ED0004 status=0
+pass=0 mmio=FEC10000 value=4F0C2105 status=0
+pass=0 mmio=FEC10004 value=00000000 status=0
+pass=0 mmio=FEC10008 value=00000600 status=0
+pass=1 pci=00:14.3 offset=00 value=790E1022 status=0
+pass=1 pci=00:14.3 offset=08 value=06010051 status=0
+pass=1 pci=00:14.3 offset=40 value=0000000C status=0
+pass=1 pci=00:14.3 offset=44 value=FF03FFD5 status=0
+pass=1 pci=00:14.3 offset=48 value=03A0FF07 status=0
+pass=1 pci=00:14.3 offset=50 value=00000000 status=0
+pass=1 pci=00:14.3 offset=54 value=00000000 status=0
+pass=1 pci=00:14.3 offset=58 value=00000000 status=0
+pass=1 pci=00:14.3 offset=5C value=00000000 status=0
+pass=1 pci=00:14.3 offset=A0 value=FEC10002 status=0
+pass=1 pci=00:14.3 offset=B8 value=33ED0004 status=0
+pass=1 mmio=FEC10000 value=4F0C2105 status=0
+pass=1 mmio=FEC10004 value=00000000 status=0
+pass=1 mmio=FEC10008 value=00000600 status=0
+snapshot_result=0 snapshot_pci_writes=0 snapshot_mmio_writes=0 snapshot_spi_commands=0 snapshot_ec_access=0
+smi_access_result=0 requests=2 enable_status=00 disable_status=00 before=4F0C2105 during=4FCC2105 after=4F0C2105 restricted_during=00000000 restricted_after=00000600 pm_before=0000 pm_after=0120 pm_restored=0000 pic_before=FF pic_after=FF ac_before=40 ac_after=40 cold_reset=0 buffer_guard_failed=0 mac_restore_list_absent=1 vid_verify_test=1
+vid_verify_result=0 commands=281 restored=1 dirty_mask=0 erases=0 programs=0 failed_opcode=00 failed_address=000000 elapsed_us=21008 exclusion_verified=1 smi_9b_before=1D smi_9b_after=1D smi_b2_before=40 smi_b2_after=40 allowlist=9F,05,35,15,5A,03 write_sectors=NONE verify_sectors=03D000,042000

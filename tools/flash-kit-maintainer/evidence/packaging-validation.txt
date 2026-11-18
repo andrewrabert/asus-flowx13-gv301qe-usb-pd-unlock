@@ -1,0 +1,17 @@
+Packaging validation, 2026-11-18
+
+All four EFI applications rebuilt byte-identically to the original hardware-used binaries
+with the available GNU-EFI tree, GCC and binutils. No binary was replaced.
+PowerShell 7.4.6 parsed all nine packaged scripts successfully.
+19 offline PowerShell checks passed using recorded hardware logs and backup fixtures:
+matching stock host/EC and patched EC accepted; unequal/truncated backups, unexpected
+sectors, already-patched input, failed/incomplete logs, dirty flash, partial programming,
+failed SMM cleanup, missing exclusion verification, and pending operations refused.
+The Windows 5.1 orchestration, BCD/ESP staging, and cancellation have not been run
+end-to-end with this package. No laptop access, firmware write or reboot was performed
+while preparing the package. Original EFI hardware evidence is included separately.
+
+Minimal launcher revision: 16 offline resume/collector state checks and two
+package integrity/layout tests passed. All 19 backup/result refusal checks
+passed against the extracted generated engine. All packaged PowerShell scripts
+parse under PowerShell 7.4.6. No new Windows hardware run was performed.
